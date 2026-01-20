@@ -8,6 +8,10 @@ Supports both:
 - Local development with .env files
 - Streamlit Cloud with st.secrets
 
+Features:
+- Chat with company documents
+- Conversation logging to Google Sheets
+
 Usage:
     streamlit run app.py
 """
@@ -15,6 +19,8 @@ Usage:
 import streamlit as st
 from dotenv import load_dotenv
 import os
+import time
+import uuid
 
 # Load environment variables early (for local development)
 load_dotenv()
@@ -438,6 +444,13 @@ def display_sidebar():
         """, unsafe_allow_html=True)
 
 
+def get_session_id() -> str:
+    """Generate or retrieve a unique session ID."""
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())[:8]
+    return st.session_state.session_id
+
+
 def main():
     """Main application function."""
     display_header()
@@ -449,6 +462,15 @@ def main():
     if "chat_engine" not in st.session_state:
         st.session_state.chat_engine = None
         st.session_state.init_error = None
+    
+    # Initialize chat logger
+    if "chat_logger" not in st.session_state:
+        try:
+            from chat_logger import get_logger
+            st.session_state.chat_logger = get_logger()
+        except Exception as e:
+            st.session_state.chat_logger = None
+            print(f"[App] Chat logger not available: {e}")
     
     # Initialize chat engine
     if st.session_state.chat_engine is None and st.session_state.init_error is None:
@@ -490,9 +512,11 @@ def main():
         # Generate response
         with st.chat_message("assistant"):
             with st.spinner("Suche in Dokumenten..."):
+                start_time = time.time()
                 try:
                     response = st.session_state.chat_engine.chat(prompt)
                     response_text = str(response)
+                    response_time = time.time() - start_time
                     
                     st.markdown(response_text)
                     
@@ -500,6 +524,18 @@ def main():
                         "role": "assistant",
                         "content": response_text
                     })
+                    
+                    # Log conversation to Google Sheets
+                    if st.session_state.chat_logger and st.session_state.chat_logger.enabled:
+                        try:
+                            st.session_state.chat_logger.log_conversation(
+                                session_id=get_session_id(),
+                                user_message=prompt,
+                                assistant_response=response_text,
+                                response_time=response_time
+                            )
+                        except Exception as log_error:
+                            print(f"[App] Logging error: {log_error}")
                     
                 except Exception as e:
                     error_msg = f"Fehler: {str(e)}"
